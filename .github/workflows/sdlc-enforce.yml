@@ -43,12 +43,12 @@ jobs:
 
           # Read development.branch from sdlc.yaml.
           # Falls back to SDLC_DEV_BRANCH (set at wizard time), then 'main'.
-          DEV_BRANCH=$(awk '/^development:/{found=1} found && /^[[:space:]]+branch:/{gsub(/.*branch:[[:space:]]*/,""); print; exit}' sdlc.yaml 2>/dev/null)
+          DEV_BRANCH=$(awk '...' sdlc.yaml 2>/dev/null || true)
           echo "dev_branch=${DEV_BRANCH:-${SDLC_DEV_BRANCH:-main}}" >> "$GITHUB_OUTPUT"
 
           # Read testing.branch_pattern and derive prefix.
           # Falls back to SDLC_RELEASE_PREFIX (set at wizard time), then 'release/'.
-          RELEASE_PATTERN=$(awk '/^testing:/{found=1} found && /^[[:space:]]+branch_pattern:/{gsub(/.*branch_pattern:[[:space:]]*/,""); gsub(/["'"'"']/,""); print; exit}' sdlc.yaml 2>/dev/null)
+          RELEASE_PATTERN=$(awk '...' sdlc.yaml 2>/dev/null || true)
           RELEASE_PATTERN="${RELEASE_PATTERN:-${SDLC_RELEASE_PREFIX:-release/**}}"
           RELEASE_PREFIX="${RELEASE_PATTERN//\*/}"
           RELEASE_PREFIX="${RELEASE_PREFIX//\?/}"
