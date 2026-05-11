@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       setup_pat:
-        description: 'PAT with repo scope for ruleset creation'
+        description: 'PAT with repo scope for branch protection'
         required: true
         type: string
 
@@ -15,55 +15,32 @@ jobs:
   create-rulesets:
     runs-on: ubuntu-latest
     steps:
-      - name: Create branch protection rulesets
+      - name: Configure branch protection
         uses: actions/github-script@v7
         with:
           github-token: ${{ inputs.setup_pat }}
           script: |
-            const { owner, repo } = context.repo;
+            const { owner, repo: repoName } = context.repo;
 
-            async function upsertRuleset(config) {
-              let existing;
+            async function protectBranch(branch, approvals) {
+              const checks = [{ context: 'SDLC Enforce' }];
               try {
-                const { data } = await github.request('GET /repos/{owner}/{repo}/rulesets', { owner, repo });
-                existing = data.find(r => r.name === config.name);
-              } catch {}
-              if (existing) {
-                await github.request('PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}', {
-                  owner, repo, ruleset_id: existing.id, ...config,
+                await github.request('PUT /repos/{owner}/{repo}/branches/{branch}/protection', {
+                  owner, repo: repoName, branch,
+                  required_status_checks: { strict: true, checks },
+                  enforce_admins: false,
+                  required_pull_request_reviews: {
+                    required_approving_review_count: approvals,
+                    dismiss_stale_reviews: true,
+                  },
+                  restrictions: null,
+                  allow_force_pushes: false,
+                  allow_deletions: false,
                 });
-              } else {
-                await github.request('POST /repos/{owner}/{repo}/rulesets', { owner, repo, ...config });
+                console.log(`✅ Branch protection set for ${branch}`);
+              } catch (err) {
+                core.setFailed(`Failed to protect ${branch}: ${err.message}`);
               }
-              console.log(`Upserted ruleset: ${config.name}`);
             }
 
-            try {
-              await upsertRuleset({
-                name: 'sdlc-main-protection',
-                target: 'branch',
-                enforcement: 'active',
-                conditions: { ref_name: { include: ['refs/heads/dev'], exclude: [] } },
-                rules: [
-                  { type: 'pull_request', parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, require_last_push_approval: false, require_code_owner_review: false, required_review_thread_resolution: false } },
-                  { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'SDLC Enforce' }] } },
-                  { type: 'non_fast_forward' }
-                ]
-              });
-
-              await upsertRuleset({
-                name: 'sdlc-release-protection',
-                target: 'branch',
-                enforcement: 'active',
-                conditions: { ref_name: { include: ['refs/heads/rel/*'], exclude: [] } },
-                rules: [
-                  { type: 'pull_request', parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, require_last_push_approval: false, require_code_owner_review: false, required_review_thread_resolution: false } },
-                  { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'SDLC Enforce' }] } },
-                  { type: 'non_fast_forward' }
-                ]
-              });
-
-              console.log('✅ All SDLC rulesets created.');
-            } catch (err) {
-              core.setFailed(`Ruleset creation failed (${err.status}): ${err.message}`);
-            }
+            await protectBranch('dev', 1);
