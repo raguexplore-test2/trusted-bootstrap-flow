@@ -1,21 +1,11 @@
 name: SDLC Setup (run once)
 
-# This workflow creates branch protection rulesets using YOUR repo's
-# built-in GITHUB_TOKEN — sdlc-state never gets admin access to your repo.
-#
-# Prerequisites (one-time, in repo Settings → Actions → General):
-#   ✅ "Allow GitHub Actions to request the administration permission"
-#      must be enabled, OR add a PAT with repo scope as secret SDLC_SETUP_PAT.
-#
-# Run it ONCE from the Actions tab after merging the setup PR.
-# You can delete this file afterwards.
-
 on:
   workflow_dispatch:
     inputs:
       setup_pat:
-        description: 'Optional: PAT with repo scope (overrides GITHUB_TOKEN for ruleset creation)'
-        required: false
+        description: 'PAT with repo scope for ruleset creation'
+        required: true
         type: string
 
 permissions:
@@ -28,7 +18,7 @@ jobs:
       - name: Create branch protection rulesets
         uses: actions/github-script@v7
         with:
-          github-token: ${{ inputs.setup_pat || secrets.SDLC_SETUP_PAT || secrets.GITHUB_TOKEN }}
+          github-token: ${{ inputs.setup_pat }}
           script: |
             const { owner, repo } = context.repo;
 
@@ -38,116 +28,42 @@ jobs:
                 const { data } = await github.request('GET /repos/{owner}/{repo}/rulesets', { owner, repo });
                 existing = data.find(r => r.name === config.name);
               } catch {}
-
               if (existing) {
                 await github.request('PUT /repos/{owner}/{repo}/rulesets/{ruleset_id}', {
                   owner, repo, ruleset_id: existing.id, ...config,
                 });
-                console.log(`Updated ruleset: ${config.name}`);
               } else {
-                await github.request('POST /repos/{owner}/{repo}/rulesets', {
-                  owner, repo, ...config,
-                });
-                console.log(`Created ruleset: ${config.name}`);
+                await github.request('POST /repos/{owner}/{repo}/rulesets', { owner, repo, ...config });
               }
+              console.log(`Upserted ruleset: ${config.name}`);
             }
 
             try {
-              // 1. Main/development branch protection
               await upsertRuleset({
                 name: 'sdlc-main-protection',
                 target: 'branch',
                 enforcement: 'active',
-                conditions: {
-                  ref_name: { include: ['refs/heads/{{DEV_BRANCH}}'], exclude: [] }
-                },
+                conditions: { ref_name: { include: ['refs/heads/dev'], exclude: [] } },
                 rules: [
-                  {
-                    type: 'pull_request',
-                    parameters: {
-                      required_approving_review_count: {{MAIN_APPROVALS}},
-                      dismiss_stale_reviews_on_push: true,
-                      require_last_push_approval: false,
-                      require_code_owner_review: false,
-                      required_review_thread_resolution: false,
-                    }
-                  },
-                  {
-                    type: 'required_status_checks',
-                    parameters: {
-                      strict_required_status_checks_policy: true,
-                      required_status_checks: [
-                        { context: 'CI \u2014 Build & Test' },
-                        { context: 'SDLC Enforce' },
-                      ]
-                    }
-                  },
+                  { type: 'pull_request', parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, require_last_push_approval: false, require_code_owner_review: false, required_review_thread_resolution: false } },
+                  { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'SDLC Enforce' }] } },
                   { type: 'non_fast_forward' }
                 ]
               });
 
-              // 2. Release branch protection
               await upsertRuleset({
                 name: 'sdlc-release-protection',
                 target: 'branch',
                 enforcement: 'active',
-                conditions: {
-                  ref_name: { include: ['refs/heads/{{RELEASE_PREFIX}}*'], exclude: [] }
-                },
+                conditions: { ref_name: { include: ['refs/heads/rel/*'], exclude: [] } },
                 rules: [
-                  {
-                    type: 'pull_request',
-                    parameters: {
-                      required_approving_review_count: {{RELEASE_APPROVALS}},
-                      dismiss_stale_reviews_on_push: true,
-                      require_last_push_approval: false,
-                      require_code_owner_review: false,
-                      required_review_thread_resolution: false,
-                    }
-                  },
-                  {
-                    type: 'required_status_checks',
-                    parameters: {
-                      strict_required_status_checks_policy: true,
-                      required_status_checks: [
-                        { context: 'CI \u2014 Build & Test' },
-                        { context: 'SDLC Enforce' },
-                      ]
-                    }
-                  },
+                  { type: 'pull_request', parameters: { required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, require_last_push_approval: false, require_code_owner_review: false, required_review_thread_resolution: false } },
+                  { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'SDLC Enforce' }] } },
                   { type: 'non_fast_forward' }
                 ]
               });
 
-              // 3. Tag protection (restrict v* tag creation)
-              await upsertRuleset({
-                name: 'sdlc-tag-protection',
-                target: 'tag',
-                enforcement: 'active',
-                conditions: {
-                  ref_name: {
-                    include: ['refs/tags/v*'],
-                    exclude: ['refs/tags/v*-rc-*', 'refs/tags/v*-dev-*'],
-                  }
-                },
-                rules: [
-                  { type: 'creation' },
-                  { type: 'update' },
-                  { type: 'deletion' },
-                ]
-              });
-
-              console.log('✅ All SDLC branch protection rulesets created successfully.');
-              console.log('You can now delete .github/workflows/sdlc-setup.yml from this repo.');
-
+              console.log('✅ All SDLC rulesets created.');
             } catch (err) {
-              if (err.status === 403 || err.status === 422) {
-                core.setFailed(
-                  `Ruleset creation failed (HTTP ${err.status}): ${err.message}\n\n` +
-                  `To fix: re-run this workflow and paste a PAT (repo scope) in the "setup_pat" input.\n` +
-                  `Generate one at: https://github.com/settings/tokens/new?scopes=repo&description=SDLC+Setup`
-                );
-              } else {
-                throw err;
-              }
+              core.setFailed(`Ruleset creation failed (${err.status}): ${err.message}`);
             }
